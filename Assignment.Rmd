@@ -1,0 +1,161 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Xin Zhang"
+date: "January 24, 2015"
+output: html_document
+---
+
+## Summary
+
+Using devices such as **Jawbone Up**, **Nike FuelBand**, and **Fitbit** it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har>.
+
+The objective of this project is to use the data available here:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+to construct a machine learning algorithm to predict the manner in which the subject did the exercise. The report will describe the data, the model construction process, the model selection based on cross validation, and the expected error calculation. 
+
+Finally, I will also use the selected model to make prediction on the test data, which is available here:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+## Data
+First step is to download and import the training and testing data from the above links.
+
+```{r, cache=TRUE}
+setwd('/Users/xinzhang/Documents/dataScience/MachineLearning')
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "training.csv", method="curl")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "testing.csv", method="curl")
+data <- read.table("training.csv", sep=",", header=TRUE)
+test <- read.table("testing.csv", sep=",", header=TRUE)
+head(data[,1:10])
+```
+
+It could be seen that many columns have a lot of missing values, and hence they are read into R with a character value. The following code will change them into numeric values.
+
+```{r, cache=TRUE, warning=FALSE}
+num <- function(x) as.numeric(x)
+data1 <- apply(data[,8:(ncol(data)-1)], 2, num)
+head(data1[,1:10])
+finalData <- data.frame(data[,1:7], data1, data[ncol(data)])
+dim(data)
+dim(finalData)
+```
+## Exploratory Analysis
+
+I first separate the training and testing sample from the finalData I created above. Here I use 70% data as the training sample, while keep 30% data as the testing sample.
+
+```{r, cache=TRUE, warning=FALSE}
+library(caret)
+library(ggplot2)
+set.seed(10011)
+inTrain <- createDataPartition(y=finalData$classe, p=0.7, list=FALSE)
+training <- finalData[inTrain, ]
+testing <- finalData[-inTrain, ]
+dim(training)
+dim(testing)
+```
+I then impute the missing values using the preProcess function in caret. The method of imputation is bagImpute. However, it is unfortunate that even after imputation, most of the predictors with missing values still contain a large portion of missing values. I finally decided to delete all the predictors containing a large portion of missing values.
+
+```{r, cache=TRUE}
+set.seed(500)
+preObj <- preProcess(training[,8:(ncol(training)-1)], method="bagImpute")
+preTrain <- predict(preObj, training[,8:(ncol(training)-1)])
+preTest <- predict(preObj, testing[,8:(ncol(training)-1)])
+include <- which(!apply(preTrain, 2, function(x) any(is.na(x))))
+training1 <- data.frame(training[,1:7], preTrain[,include], training[ncol(training)])
+testing1 <- data.frame(testing[,1:7], preTest[,include], testing[ncol(testing)])
+```
+
+A plot for selected features is given below. From the plot, it could be seen that constructing a linear model for classification would be difficult, since there barely linear trend between the predictors and the response in the data.
+
+```{r, cache=TRUE, echo=FALSE}
+featurePlot(x=training1[, c("user_name", "roll_belt", "pitch_belt")], y = training1$classe, plot="pairs")
+```
+
+However, the user name factor is an important confounding factor in the dataset, which could be seen under the following density plot for several variables. The user name factor would affect the predictor levels.
+
+```{r, cache=TRUE, echo=FALSE}
+qplot(pitch_belt, colour = user_name, data=training1, geom="density")
+qplot(roll_belt, colour = user_name, data=training1, geom="density")
+```
+
+## Model Training
+To construct a classification model using the above data for predict the manner of subjects' exercise, the following issues are considered:
+
+- Predictors
+
+All predictors except for the number label (first column) in the dataset are used in the model. This is due to the reason that we do not want to lose any information. 
+
+- Preprocess
+
+Due to the large missing values in some of the predictors, a bagged tree imputation is used. This method was already conducted in the exploratory analysis section. However, the missing value proportion is too large for the imputation to have a valid outcome. I finally decided to drop all variables with a large portion of missing values.
+
+- Model
+
+There are three potential models to select from namely, bagged tree, gradient boosting model, and random forest. All these models could deal with the non-linear pattern as the data suggested. 
+
+- Model selection
+
+Repeated cross validation is used for model accuracy estimate of each model to tune the parameters in the model fitting. The final model selection would be based on the model accuracy on the testing sample.
+
+### Gradient Boosting Model
+
+```{r, cache=TRUE}
+set.seed(888)
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+boostFit <- train(classe~., data=training1[,-1], method="gbm", trControl = fitControl, verbose = FALSE)
+boostFit
+```
+
+### Bagged Tree
+
+```{r, cache=TRUE}
+set.seed(989)
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+bagFit <- train(classe~., data=training1[,-1], method="treebag", trControl = fitControl, verbose = FALSE)
+bagFit
+```
+
+### Random Forest
+
+```{r, cache=TRUE}
+set.seed(1989)
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+rfFit <- train(classe~., data=training1[,-1], method="rf", trControl = fitControl, verbose = FALSE)
+rfFit
+```
+
+The three models all give us very high training accuracy. In the next section, we will use the accuracy in the testing sample to select the final model we will use. Also, in the next section, a combined model is introduced.
+
+## Test Error Rate and Model Selection
+
+The accuracy error rates on the testing sample could be estimated below.
+
+### Gradient Boosting Model
+```{r, cache=TRUE}
+boostPred <- predict(boostFit, testing)
+confusionMatrix(boostPred, testing$classe)
+```
+
+### Bagged Tree
+```{r, cache=TRUE}
+bagPred <- predict(bagFit, testing)
+confusionMatrix(bagPred, testing$classe)
+```
+
+### Random Forest
+```{r, cache=TRUE}
+rfPred <- predict(rfFit, testing)
+confusionMatrix(rfPred, testing$classe)
+```
+From the results above, one can see that all the models give high accuracy rate on the testing sample. The expected out of sample error rate is less than 0.3%. The smallest out of sample error rate is generated by the random forest model, which is 0.1%. This would be the best model among the three, and we will use this model for our prediction.
+
+## Final Prediction on Test Sample
+
+The final prediction on the test sample is as follows.
+
+```{r, cache=TRUE}
+prediction <- predict(rfFit, test)
+prediction
+```
